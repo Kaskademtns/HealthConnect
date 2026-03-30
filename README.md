@@ -161,4 +161,4 @@ Project Objectivess:
 
 ## Author
 
-Created for a Capstone Sprint 1 project focused on secure cloud network design for HealthConnect.
+Created for a Capstone Sprint 1. Project focused on secure cloud network design for HealthConnect.
