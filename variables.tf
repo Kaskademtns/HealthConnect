@@ -1,6 +1,6 @@
 # There are three variables declared in this file.
 variable "project_id" {
-  description = "The GCP Project ID"
+  description = "healthconnect-project"
   type        = string
 }
 

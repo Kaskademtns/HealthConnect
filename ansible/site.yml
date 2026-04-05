@@ -1,0 +1,32 @@
+# site.yml — Sprint 2 baseline playbook
+# 1) Uses sudo (become) for admin-level configuration
+# 2) Installs basic tools (curl/jq/unzip)
+# 3) Creates a proof file to demonstrate Ansible execution
+
+- name: Sprint 2 baseline (proof run)
+  hosts: webservers
+  become: true
+  tasks:
+    - name: Install basic tools
+      apt:
+        name:
+          - curl
+          - jq
+          - unzip
+        state: present
+        update_cache: true
+
+    - name: Create proof file
+      copy:
+        dest: /etc/hc_sprint2_proof.txt
+        content: "Sprint2 baseline applied by Ansible\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Show proof file
+      command: cat /etc/hc_sprint2_proof.txt
+      register: proof
+
+    - debug:
+        var: proof.stdout 

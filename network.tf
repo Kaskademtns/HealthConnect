@@ -1,119 +1,127 @@
-# 1. Create the Custom VPC
+################################################################################
+# Sprint 1 & 2 — Secure Network Foundation + Managed Ansible Node
+#
+# This configuration implements the HealthConnect RFP security pillars:
+# - Multi-tier network segmentation (Public / App / Data)
+# - Zero-Trust Management: No Public IPs, all access via IAP Tunnel
+# - Identity-Based Access: Centralized OS Login instead of manual SSH keys
+# - Controlled Egress: Cloud NAT for private package updates
+################################################################################
+
+# 1) Custom VPC (no auto-generated subnets for maximum isolation)
 resource "google_compute_network" "main_vpc" {
   name                    = var.vpc_name
   auto_create_subnetworks = false
 }
 
-# 2. Public Subnet (Web/Bastion)
+# 2) Three-tier Subnet Architecture
+
+# Tier 1: Public subnet (Reserved for Load Balancers/Bastions)
 resource "google_compute_subnetwork" "public_subnet" {
   name          = "public-subnet"
   ip_cidr_range = "10.0.1.0/24"
   region        = var.region
   network       = google_compute_network.main_vpc.id
-
-  log_config {
-    aggregation_interval = "INTERVAL_5_SEC"
-    flow_sampling        = 1.0
-    metadata             = "INCLUDE_ALL_METADATA"
-  }
 }
 
-# TASK: Add the 'private-app-subnet' (10.0.2.0/24) below!
+# Tier 2: Private application subnet (For Web/App Servers managed by Ansible)
 resource "google_compute_subnetwork" "private_app_subnet" {
-  name                     = "private-app-subnet"
-  ip_cidr_range            = "10.0.2.0/24"
-  region                   = var.region
-  network                  = google_compute_network.main_vpc.id
-  private_ip_google_access = true
-
-  log_config {
-    aggregation_interval = "INTERVAL_5_SEC"
-    flow_sampling        = 1.0
-    metadata             = "INCLUDE_ALL_METADATA"
-  }
+  name          = "private-app-subnet"
+  ip_cidr_range = "10.0.2.0/24"
+  region        = var.region
+  network       = google_compute_network.main_vpc.id
 }
 
-# TASK: Add the 'data-isolated-subnet' (10.0.3.0/24) below!
+# Tier 3: Isolated data subnet (For high-security Database workloads)
 resource "google_compute_subnetwork" "data_isolated_subnet" {
   name          = "data-isolated-subnet"
   ip_cidr_range = "10.0.3.0/24"
   region        = var.region
   network       = google_compute_network.main_vpc.id
-
-  log_config {
-    aggregation_interval = "INTERVAL_5_SEC"
-    flow_sampling        = 1.0
-    metadata             = "INCLUDE_ALL_METADATA"
-  }
 }
 
-# 5. Cloud Router for NAT
-resource "google_compute_router" "nat_router" {
-  name    = "healthconnect-nat-router"
+# 3) Cloud NAT for controlled egress
+# Allows private instances to download updates (apt install) without public IPs
+resource "google_compute_router" "router" {
+  name    = "hc-router"
   region  = var.region
   network = google_compute_network.main_vpc.id
 }
 
-#6 Cloud NAT for Private Subnet
-resource "google_compute_router_nat" "private_app_nat" {
-  name                               = "private-app-nat"
-  router                             = google_compute_router.nat_router.name
+resource "google_compute_router_nat" "nat" {
+  name                               = "hc-nat"
+  router                             = google_compute_router.router.name
   region                             = var.region
   nat_ip_allocate_option             = "AUTO_ONLY"
   source_subnetwork_ip_ranges_to_nat = "ALL_SUBNETWORKS_ALL_IP_RANGES"
-
 }
-#7 Allow SSH via IAP (Identity-Aware Proxy)
-resource "google_compute_firewall" "allow_ssh" {
-  name    = "allow-iap-ssh"
-  network = google_compute_network.main_vpc.name
 
-  direction     = "INGRESS"
-  priority      = 1000
-  source_ranges = ["35.235.240.0/20"]
-  target_tags   = ["iap-ssh"]
+# 4) Identity & Access Management (IAM) Configuration
+
+# Enable OS Login at the project level
+# MANDATORY: Replaces manual SSH keys with centralized IAM identity management
+resource "google_compute_project_metadata_item" "enable_oslogin" {
+  key   = "enable-oslogin"
+  value = "TRUE"
+}
+
+# 5) Firewall Rules
+
+# Allow SSH ONLY from Google's IAP TCP Forwarding range
+# Forces all management traffic through the Identity-Aware Proxy
+resource "google_compute_firewall" "allow_ssh_iap" {
+  name    = "allow-ssh-iap"
+  network = google_compute_network.main_vpc.name
 
   allow {
     protocol = "tcp"
     ports    = ["22"]
   }
+
+  # Official Google IAP source range
+  source_ranges = ["35.235.240.0/20"]
+  target_tags   = ["hc-ansible-managed"]
 }
 
-# Allow Internal HTTP (Port 8080) from Public Subnet to Private App Subnet
-resource "google_compute_firewall" "allow_public_to_private_app_8080" {
-  name    = "allow-public-to-private-app-8080"
+# Allow Google Cloud Health Checks
+resource "google_compute_firewall" "allow_health_checks" {
+  name    = "allow-health-checks"
   network = google_compute_network.main_vpc.name
 
-  direction     = "INGRESS"
-  priority      = 1000
-  source_ranges = ["10.0.1.0/24"]
-  target_tags   = ["private-app"]
   allow {
     protocol = "tcp"
-    ports    = ["8080"]
+    ports    = ["80", "443", "8080"]
   }
+
+  source_ranges = ["130.211.0.0/22", "35.191.0.0/16"]
 }
 
-# Test Instance
+# 6) Sprint 2 Managed VM (Consolidated hc-test-vm)
+# Purpose: High-security Ansible node for automated portal deployment
 resource "google_compute_instance" "test_vm" {
   name         = "hc-test-vm"
   machine_type = "e2-micro"
   zone         = "${var.region}-a"
 
-  tags = ["iap-ssh", "private-app"]
+  # Network tags for targeted firewall security
+  tags = ["hc-ansible-managed"]
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-11"
+      image = "debian-cloud/debian-12"
     }
   }
 
+  # ZERO-TRUST CONFIG: No 'access_config' block means NO External/Public IP
   network_interface {
     subnetwork = google_compute_subnetwork.private_app_subnet.id
-    # No access_config = No Public IP
   }
 
-  metadata = {
-    enable-oslogin = "TRUE"
+  # Essential for OS Login and API interaction
+  service_account {
+    scopes = ["cloud-platform"]
   }
+
+  # Hard dependency to ensure security policies are active before VM creation
+  depends_on = [google_compute_project_metadata_item.enable_oslogin]
 }
