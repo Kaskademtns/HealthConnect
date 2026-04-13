@@ -125,3 +125,48 @@ resource "google_compute_instance" "test_vm" {
   # Hard dependency to ensure security policies are active before VM creation
   depends_on = [google_compute_project_metadata_item.enable_oslogin]
 }
+
+# 1. Add a firewall rule for the database VM with specific tags
+resource "google_compute_firewall" "allow_db_from_app" {
+  name    = "allow-db-from-app"
+  network = google_compute_network.main_vpc.name
+
+  allow {
+    protocol = "tcp"
+    ports    = ["5432"] # HINT: Enter the default port for PostgreSQL services
+  }
+
+  # Source Tag: Allow access only from VMs with this Web Server tag
+  source_tags = ["hc-ansible-managed"]
+
+  # Target Tag: Apply this rule to VMs with this Database tag
+  target_tags = ["hc-db-vm"] # HINT: Use the tag name you will assign to the DB VM below
+}
+
+# 2. Create the Database VM in the isolated subnet
+resource "google_compute_instance" "db_vm" {
+  name         = "hc-db-vm"
+  machine_type = "e2-micro"
+  zone         = "${var.region}-a"
+  tags         = ["hc-db-vm", "hc-ansible-managed"] # This must match the 'target_tags' in the firewall rule above
+
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-12"
+    }
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.data_isolated_subnet.id # HINT: Use the name of the isolated data subnet defined in Sprint 1
+
+    # WARNING: Do NOT include an 'access_config' block here.
+    # THOUGHT: What does the absence of this block mean for the VM's connectivity? (Ref: RFP 4.1)
+  }
+
+  service_account {
+    scopes = ["cloud-platform"]
+  }
+
+  # Ensure the OS Login policy is active before the VM is created
+  depends_on = [google_compute_project_metadata_item.enable_oslogin]
+}

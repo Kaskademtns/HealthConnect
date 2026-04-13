@@ -1,0 +1,37 @@
+# site.yml — Sprint 2 baseline playbook
+# What this playbook does:
+# 1) Uses sudo (become) to perform admin-level configuration
+# 2) Installs a few basic tools (curl/jq/unzip)
+# 3) Writes a proof file to /etc so you can demonstrate configuration was applied by Ansible
+# 4) Prints the proof file content in the play output (easy to screenshot)
+
+- name: Sprint 2 baseline (proof run)
+  hosts: hc
+  become: true
+  tasks:
+    # Install basic tooling commonly used in labs/ops
+    - name: Install basic tools
+      apt:
+        name:
+          - curl
+          - jq
+          - unzip
+        state: present
+        update_cache: true
+
+    # Create a simple artifact that proves the playbook ran successfully
+    - name: Create proof file
+      copy:
+        dest: /etc/hc_sprint2_proof.txt
+        content: "Sprint2 baseline applied by Ansible\n"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # Show the artifact content in the Ansible output (for grading evidence)
+    - name: Show proof file
+      command: cat /etc/hc_sprint2_proof.txt
+      register: proof
+
+    - debug:
+        var: proof.stdout

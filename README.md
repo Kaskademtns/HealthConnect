@@ -162,3 +162,39 @@ Project Objectivess:
 ## Author
 
 Created for a Capstone Sprint 1. Project focused on secure cloud network design for HealthConnect.
+
+## Technical Features (Updated Sprint 2)
+​
+- **Logical Isolation:** 3-tier subnets (Public, Private, Isolated).
+- **Security:** IAP-based SSH access and Cloud NAT for secure egress.
+- **Identity & Access:** OS Login for centralized SSH identity on `hc-test-vm`.
+- **Automation:** Ansible playbooks for:
+  - Baseline configuration (curl/jq/unzip, proof file)
+  - Web server setup (Nginx) served via WSL inventory with IAP tunneled SSH
+- **Auditability:** Cloud Audit Logs providing evidence trail.
+​
+## Getting Started
+​
+### Prerequisites
+- Google Cloud SDK
+- Terraform >= 1.4.0
+- Ansible >= 2.x
+- WSL Ubuntu with gcloud CLI (installed inside WSL)
+​
+### Deployment
+1. Set your `project_id` in `terraform.tfvars` (see `terraform.tfvars.example`)
+2. Run:
+   ```bash
+   terraform init
+   terraform apply
+3. Configure Ansible inventory (WSL-only workflow with IAP tunneled SSH):
+   ```bash
+# In WSL
+cd ansible
+# Follow the Sprint 2 Lab Guide for inventory.ini and key setup
+ansible webservers -i inventory.ini -m ping
+ansible-playbook -i inventory.ini site.yml
+# To run web server setup
+ansible-playbook -i inventory.ini websetup.yml
+# Verify Nginx is serving (replace webservers with your inventory group)
+ansible webservers -i inventory.ini -a "curl -s http://localhost"

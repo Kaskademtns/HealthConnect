@@ -1,0 +1,60 @@
+---
+- name: "Sprint 3: Application Data - Database Schema & RBAC Initialization"
+  hosts: dbservers
+  become: yes
+  vars:
+    db_name: healthconnect_db
+    db_user: hc_admin
+    db_password: "SecurePassword123" # Deployment Note: Use Ansible Vault for production secrets.
+
+  tasks:
+    - name: "Install Database Drivers"
+      # 'python3-psycopg2' allows Ansible to execute PostgreSQL queries directly.
+      apt:
+        name: [acl, python3-psycopg2]
+        state: present
+
+    - name: "Ensure Target Database Exists"
+      become_user: postgres
+      postgresql_db:
+        name: "{{ db_name }}"
+
+    - name: "Create Restricted Application Service Account"
+      # Security Pillar: Least Privilege.
+      # This account is used for app-level queries, not database administration.
+      become_user: postgres
+      postgresql_user:
+        db: "{{ db_name }}"
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        state: present
+
+    - name: "Initialize Schema and Enforce Object Permissions"
+      # Logic: Create the table and immediately grant specific, granular access.
+      become_user: postgres
+      postgresql_query:
+        db: "{{ db_name }}"
+        query: |
+          -- Create the production table for HealthConnect portal
+          CREATE TABLE IF NOT EXISTS patients (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100),
+            status VARCHAR(50),
+            last_visit TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+
+          -- GRANT SYSTEM PRIVILEGES
+          -- Allows the user to 'use' the public schema (required for queries)
+          GRANT USAGE ON SCHEMA public TO {{ db_user }};
+
+          -- GRANT OBJECT PRIVILEGES
+          -- Limits the user to DML actions only (No DROP or TRUNCATE allowed)
+          GRANT SELECT, INSERT, UPDATE ON TABLE patients TO {{ db_user }};
+
+          -- Insert Audit-friendly Demo Records
+          INSERT INTO patients (name, status) VALUES ('John Doe', 'Stable') ON CONFLICT DO NOTHING;
+          INSERT INTO patients (name, status) VALUES ('Jane Smith', 'Recovering') ON CONFLICT DO NOTHING;
+
+    - name: "Final Verification Message"
+      debug:
+        msg: "Database '{{ db_name }}' is initialized with active RBAC for user '{{ db_user }}'."

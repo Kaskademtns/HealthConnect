@@ -1,0 +1,54 @@
+---
+- name: "Sprint 3: Infrastructure - Database Setup & Network Verification"
+  hosts: dbservers
+  become: yes
+  tasks:
+    - name: "Install System Dependencies"
+      # 'acl' is mandatory for Ansible to manage 'become_user: postgres' sessions.
+      # 'postgresql' installs the core database engine on the private VM.
+      apt:
+        name: 
+          - acl
+          - postgresql
+        state: present
+        update_cache: yes
+
+    - name: "Configure PostgreSQL Network Listener"
+      # Modifies the config to listen on the internal VPC interface instead of just localhost.
+      # Security Note: The VM remains private as it has no External IP.
+      lineinfile:
+        path: /etc/postgresql/15/main/postgresql.conf
+        regexp: "^#?listen_addresses ="
+        line: "listen_addresses = '*'"
+      notify: restart postgresql
+
+    - name: "Configure Host-Based Authentication (pg_hba.conf)"
+      # Security Pillar: Defense in Depth.
+      # Explicitly whitelists the App Subnet (10.0.2.0/24) to connect to the specific DB.
+      lineinfile:
+        path: /etc/postgresql/15/main/pg_hba.conf
+        line: "host    healthconnect_db    hc_admin    10.0.2.0/24    scram-sha-256"
+        insertafter: EOF
+      notify: restart postgresql
+
+  handlers:
+    - name: restart postgresql
+      service:
+        name: postgresql
+        state: restarted
+
+- name: "Sprint 3: Connectivity Test - Web to DB Handshake"
+  hosts: webservers
+  tasks:
+    - name: "Verify Internal Firewall Path (Port 5432)"
+      # Confirms that the Terraform 'allow-db-from-app' firewall rule is active.
+      wait_for:
+        host: "{{ hostvars['hc-db-vm']['ansible_host'] }}"
+        port: 5432
+        timeout: 5
+      register: db_test
+
+    - name: "Log Success Evidence"
+      debug:
+        msg: "SUCCESS: Web Tier (10.0.2.2) can reach Data Tier (10.0.3.2) on Port 5432."
+      when: db_test is success
