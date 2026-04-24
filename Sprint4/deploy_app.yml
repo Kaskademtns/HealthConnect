@@ -1,0 +1,54 @@
+---
+- name: Configure Database Network & Security Access
+  hosts: dbservers
+  become: yes
+  tasks:
+    - name: Install System Dependencies for PostgreSQL
+      # Ensures the postgres user can be managed and python can interface with the DB
+      apt:
+        name:
+          - acl
+          - postgresql-15
+          - python3-psycopg2
+        state: present
+        update_cache: yes
+
+    - name: Enable PostgreSQL to Listen on Internal VPC Interface
+      # Changes default 'localhost' to '*' to allow internal VPC traffic
+      lineinfile:
+        path: /etc/postgresql/15/main/postgresql.conf
+        regexp: "^#?listen_addresses ="
+        line: "listen_addresses = '*'"
+      notify: restart postgresql
+
+    - name: Authorize Web Subnet via HBA (Idempotent Configuration)
+      # Uses regex to find any existing rule for this subnet and ensure it matches our Golden State.
+      # This prevents duplicate lines and handles varying whitespace.
+      lineinfile:
+        path: /etc/postgresql/15/main/pg_hba.conf
+        regexp: '^host\s+healthconnect_db\s+hc_admin\s+10\.0\.2\.0/24'
+        line: "host    healthconnect_db    hc_admin    10.0.2.0/24    md5"
+        insertafter: EOF
+      notify: restart postgresql
+
+  handlers:
+    - name: restart postgresql
+      service:
+        name: postgresql
+        state: restarted
+
+- name: Final Connectivity Validation
+  hosts: webservers
+  tasks:
+    - name: Test TCP Handshake to Database on Port 5432
+      # The 'Smoke Test': Verifies the route is open from Web Subnet to DB Subnet.
+      wait_for:
+        host: "{{ hostvars['hc-db-vm']['ansible_host'] }}"
+        port: 5432
+        timeout: 10
+      register: db_test
+
+    - name: Report Connection Status
+      debug:
+        msg: "SUCCESS: Web Node can reach the Database Tier via PostgreSQL protocol (Port 5432)."
+      when: db_test is success

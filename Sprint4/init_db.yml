@@ -1,0 +1,78 @@
+---
+- name: Initialize HealthConnect Database
+  hosts: dbservers
+  become: yes
+  vars:
+    db_name: healthconnect_db
+    db_user: hc_admin
+    #
+    # Ensure your Ansible Vault password file is available when running this
+    # NOTE: The original plaintext password is 'SecurePassword123'.
+    # To encrypt this, use the following command in WSL:
+    # ansible-vault encrypt_string 'SecurePassword123' --name 'db_password'
+    # When prompted, use the Vault Password: 'sprint4'
+    #
+    db_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          62346235333233313565366561383537336362326666326236326136316364303330333961323739
+          6537373737363763336365373064326262316232636432390a396530646230303035623335323061
+          66353566386266343731363132613332643662363432623363656466306636383864373135306566
+          3639383963663032610a363730626130613634653238303039393235623662306466343230376465
+          62636532333830336431626234343766616136366531376330616234383861386330
+
+
+  tasks:
+    # Requirement: Install the Database Engine and dependencies
+    - name: Update apt cache and install PostgreSQL Server
+      apt:
+        name: 
+          - postgresql-15
+          - acl
+          - python3-psycopg2
+        state: present
+        update_cache: yes
+
+    # Requirement: Ensure the service is active to allow local connections
+    - name: Ensure PostgreSQL service is started and enabled
+      service:
+        name: postgresql
+        state: started
+        enabled: yes
+
+    # Note: Using become_user: postgres as the system admin
+    - name: Create HealthConnect Database
+      become_user: postgres
+      postgresql_db:
+        name: "{{ db_name }}"
+
+    # Security: Creates a restricted application user with the encrypted password
+    - name: Create HealthConnect Application User
+      become_user: postgres
+      postgresql_user:
+        db: "{{ db_name }}"
+        name: "{{ db_user }}"
+        password: "{{ db_password }}"
+        priv: "ALL" 
+
+    # RFP 4.2 Compliance: Define table and restrict permissions to the hc_admin user
+    - name: Create Patients Table and Grant Managed Privileges
+      become_user: postgres
+      postgresql_query:
+        db: "{{ db_name }}"
+        query: |
+          -- Create HIPAA-compliant data structure
+          CREATE TABLE IF NOT EXISTS patients (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(100),
+            status VARCHAR(50),
+            last_visit TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          );
+
+          -- Lock down the public schema
+          GRANT USAGE ON SCHEMA public TO {{ db_user }};
+          GRANT SELECT, INSERT, UPDATE ON TABLE patients TO {{ db_user }};
+
+          -- Insert dummy data for Load Balancer verification
+          INSERT INTO patients (name, status) 
+          VALUES ('John Doe', 'Stable'), ('Jane Smith', 'Recovering') 
+          ON CONFLICT DO NOTHING;

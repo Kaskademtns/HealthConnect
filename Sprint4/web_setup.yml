@@ -1,0 +1,137 @@
+---
+- name: Sprint 4 - Deploy HA Web Tier with Ops Agent Monitoring
+  hosts: webservers
+  become: yes
+  tasks:
+    - name: Install Nginx, Python drivers, and CGI support
+      apt:
+        name: [nginx, fcgiwrap, python3-psycopg2, curl]
+        state: present
+        update_cache: yes
+
+    - name: Check if Ops Agent is already installed
+      command: dpkg-query -l google-cloud-ops-agent
+      register: ops_agent_check
+      failed_when: false
+      changed_when: false
+
+    - name: Download and Install Google Cloud Ops Agent
+      shell: |
+        curl -sSO https://dl.google.com/cloudagents/add-google-cloud-ops-agent-repo.sh
+        bash add-google-cloud-ops-agent-repo.sh --also-install
+      when: ops_agent_check.rc != 0
+
+    - name: Ensure Ops Agent is started and enabled
+      service:
+        name: google-cloud-ops-agent
+        state: started
+        enabled: yes
+
+    - name: Deploy fetch_data.py with syslog logging
+      copy:
+        dest: /var/www/html/fetch_data.py
+        mode: '0755'
+        owner: www-data
+        group: www-data
+        content: |
+          #!/usr/bin/python3
+          import psycopg2
+          import sys
+          import syslog
+
+          conn_params = {
+              "host": "10.0.3.3",
+              "database": "healthconnect_db",
+              "user": "hc_admin",
+              "password": "SecurePassword123"
+          }
+
+          try:
+              conn = psycopg2.connect(**conn_params)
+              cur = conn.cursor()
+              cur.execute("SELECT name, status FROM patients;")
+              rows = cur.fetchall()
+
+              print("Content-Type: text/html\n")
+              print("<html><body><h2>Patient Data (Live Feed)</h2><ul>")
+              for row in rows:
+                  print(f"<li>{row[0]}: {row[1]}</li>")
+              print("</ul><p style='color:green;'>✔ Backend Connected</p></body></html>")
+              cur.close()
+              conn.close()
+          except Exception as e:
+              # Critical for Cloud Monitoring
+              syslog.syslog(syslog.LOG_ERR, f"DB_ERROR: Connection Failed - {str(e)}")
+              print("Content-Type: text/html\n")
+              print(f"<html><body><h2>System Error</h2><p style='color:red;'>✘ Connection Failed</p></body></html>")
+
+    - name: Configure Nginx for CGI
+      blockinfile:
+        path: /etc/nginx/sites-available/default
+        insertbefore: "^}"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK FOR CGI"
+        block: |
+              location ~ \.py$ {
+                  include fastcgi_params;
+                  fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+                  fastcgi_pass unix:/run/fcgiwrap.socket;
+              }
+      notify: Restart Nginx
+    - name: Deploy HealthConnect portal homepage
+      copy:
+        dest: /var/www/html/index.html
+        mode: '0644'
+        owner: www-data
+        group: www-data
+        content: |
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>HealthConnect Portal</title>
+            <style>
+              body {
+                font-family: Arial, sans-serif;
+                margin: 40px;
+                color: #111;
+              }
+              h1 {
+                margin-bottom: 10px;
+              }
+              .status {
+                margin-bottom: 24px;
+                font-size: 16px;
+              }
+              .status .online {
+                color: green;
+                font-weight: bold;
+              }
+              .panel {
+                border: 1px solid #999;
+                padding: 20px;
+                margin-top: 20px;
+              }
+              iframe {
+                width: 100%;
+                height: 320px;
+                border: none;
+                background: white;
+              }
+            </style>
+          </head>
+          <body>
+            <h1>HealthConnect Secure Portal</h1>
+            <p class="status">Frontend Status: <span class="online">Online</span> (Managed by Ansible)</p>
+
+            <div class="panel">
+              <h2>Real-time Patient Data (from Backend DB)</h2>
+              <iframe src="/fetch_data.py"></iframe>
+            </div>
+          </body>
+          </html>
+      notify: Restart Nginx
+
+      
+  handlers:
+    - name: Restart Nginx
+      service: name=nginx state=restarted
